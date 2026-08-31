@@ -8,5 +8,459 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// Financial domain models are introduced in Stage 03.
-// The schema is intentionally minimal in the bootstrap stage.
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum AccountType {
+  INDIVIDUAL
+  BUSINESS
+  INTERNAL
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  RESTRICTED
+  SUSPENDED
+  CLOSED
+}
+
+enum KycStatus {
+  NOT_STARTED
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum AssetType {
+  FIAT
+  CRYPTO
+  PRIVATE_ASSET
+  SECURITY
+}
+
+enum AssetStatus {
+  ACTIVE
+  DISABLED
+  DEPRECATED
+}
+
+enum AssetNetwork {
+  NONE
+  BITCOIN
+  ETHEREUM
+  TRON
+  SOLANA
+}
+
+enum WalletStatus {
+  ACTIVE
+  RESTRICTED
+  SUSPENDED
+  CLOSED
+}
+
+enum LedgerAccountType {
+  CUSTOMER
+  PROVIDER
+  TREASURY
+  REVENUE
+  CLEARING
+  SUSPENSE
+  EXPENSE
+}
+
+enum LedgerTransactionType {
+  FIAT_DEPOSIT
+  FIAT_WITHDRAWAL
+  CRYPTO_DEPOSIT
+  CRYPTO_WITHDRAWAL
+  TRANSFER
+  EXCHANGE
+  FEE
+  HOLD
+  RELEASE
+  ADJUSTMENT
+  REVERSAL
+  INVESTMENT
+  DISTRIBUTION
+}
+
+enum LedgerTransactionStatus {
+  PENDING
+  POSTED
+  REVERSED
+  FAILED
+}
+
+enum LedgerEntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum TransactionType {
+  FIAT_DEPOSIT
+  FIAT_WITHDRAWAL
+  CRYPTO_DEPOSIT
+  CRYPTO_WITHDRAWAL
+  TRANSFER
+  EXCHANGE
+  INVESTMENT
+  DISTRIBUTION
+  FEE
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  REVIEW
+  COMPLETED
+  FAILED
+  REJECTED
+  REVERSED
+  CANCELED
+}
+
+enum ProviderType {
+  FIAT
+  CUSTODY
+  LIQUIDITY
+  KYC
+  BLOCKCHAIN_ANALYTICS
+  INVESTMENT
+}
+
+enum ProviderStatus {
+  ACTIVE
+  DEGRADED
+  DISABLED
+}
+
+enum ProviderEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum AuditActorType {
+  USER
+  ADMIN
+  SYSTEM
+  PROVIDER
+}
+
+model User {
+  id         String     @id @default(uuid()) @db.Uuid
+  authUserId String     @unique @map("auth_user_id") @db.Uuid
+  email      String?    @unique
+  status     UserStatus @default(PENDING)
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  accounts  Account[]
+  auditLogs AuditLog[]  @relation("AuditActorUser")
+
+  @@map("users")
+}
+
+model Account {
+  id          String        @id @default(uuid()) @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  type        AccountType   @default(INDIVIDUAL)
+  status      AccountStatus @default(PENDING)
+  kycStatus   KycStatus     @default(NOT_STARTED) @map("kyc_status")
+  countryCode String?       @map("country_code") @db.VarChar(2)
+  baseCurrency String       @default("BRL") @map("base_currency") @db.VarChar(16)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  wallets           Wallet[]
+  ledgerAccounts    LedgerAccount[]
+  transactions      Transaction[]
+  providerAccounts  ProviderAccount[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([kycStatus])
+  @@map("accounts")
+}
+
+model Asset {
+  id               String       @id @default(uuid()) @db.Uuid
+  code             String       @unique @db.VarChar(64)
+  symbol           String       @db.VarChar(24)
+  name             String       @db.VarChar(120)
+  type             AssetType
+  network          AssetNetwork @default(NONE)
+  decimals         Int          @default(2)
+  contractAddress  String?      @map("contract_address") @db.VarChar(255)
+  status           AssetStatus  @default(ACTIVE)
+  depositEnabled   Boolean      @default(false) @map("deposit_enabled")
+  withdrawEnabled  Boolean      @default(false) @map("withdraw_enabled")
+  exchangeEnabled  Boolean      @default(false) @map("exchange_enabled")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  wallets              Wallet[]
+  ledgerAccounts       LedgerAccount[]
+  ledgerEntries        LedgerEntry[]
+  transactions         Transaction[]              @relation("TransactionAsset")
+  feeTransactions      Transaction[]              @relation("TransactionFeeAsset")
+  providerCapabilities ProviderCapability[]
+
+  @@index([symbol])
+  @@index([type, status])
+  @@index([network])
+  @@map("assets")
+}
+
+model Wallet {
+  id                String       @id @default(uuid()) @db.Uuid
+  accountId         String       @map("account_id") @db.Uuid
+  assetId           String       @map("asset_id") @db.Uuid
+  status            WalletStatus @default(ACTIVE)
+  providerId        String?      @map("provider_id") @db.Uuid
+  providerAccountId String?      @map("provider_account_id") @db.Uuid
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  asset           Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  provider        Provider?        @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  providerAccount ProviderAccount? @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+  balance         WalletBalance?
+  transactions    Transaction[]
+
+  @@unique([accountId, assetId])
+  @@index([providerId])
+  @@index([providerAccountId])
+  @@index([status])
+  @@map("wallets")
+}
+
+model WalletBalance {
+  id        String   @id @default(uuid()) @db.Uuid
+  walletId  String   @unique @map("wallet_id") @db.Uuid
+  available Decimal  @default(0) @db.Decimal(36, 18)
+  pending   Decimal  @default(0) @db.Decimal(36, 18)
+  reserved  Decimal  @default(0) @db.Decimal(36, 18)
+  blocked   Decimal  @default(0) @db.Decimal(36, 18)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@map("wallet_balances")
+}
+
+model LedgerAccount {
+  id             String            @id @default(uuid()) @db.Uuid
+  code           String            @unique @db.VarChar(160)
+  type           LedgerAccountType
+  ownerAccountId String?           @map("owner_account_id") @db.Uuid
+  providerId     String?           @map("provider_id") @db.Uuid
+  assetId        String            @map("asset_id") @db.Uuid
+  name           String            @db.VarChar(160)
+  active         Boolean           @default(true)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  ownerAccount Account?      @relation(fields: [ownerAccountId], references: [id], onDelete: Restrict)
+  provider     Provider?     @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  asset        Asset         @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  entries      LedgerEntry[]
+
+  @@index([type, assetId])
+  @@index([ownerAccountId])
+  @@index([providerId])
+  @@map("ledger_accounts")
+}
+
+model LedgerTransaction {
+  id               String                  @id @default(uuid()) @db.Uuid
+  reference        String                  @unique @db.VarChar(96)
+  type             LedgerTransactionType
+  status           LedgerTransactionStatus @default(PENDING)
+  idempotencyKey   String?                 @unique @map("idempotency_key") @db.VarChar(128)
+  externalReference String?                @map("external_reference") @db.VarChar(255)
+  metadata         Json?
+  createdAt        DateTime                @default(now()) @map("created_at")
+  postedAt         DateTime?               @map("posted_at")
+  reversedAt       DateTime?               @map("reversed_at")
+
+  entries      LedgerEntry[]
+  transaction  Transaction?
+
+  @@index([type, status])
+  @@index([createdAt])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id                  String               @id @default(uuid()) @db.Uuid
+  ledgerTransactionId String               @map("ledger_transaction_id") @db.Uuid
+  ledgerAccountId     String               @map("ledger_account_id") @db.Uuid
+  assetId             String               @map("asset_id") @db.Uuid
+  direction           LedgerEntryDirection
+  amount              Decimal              @db.Decimal(36, 18)
+  createdAt           DateTime             @default(now()) @map("created_at")
+
+  ledgerTransaction LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  ledgerAccount     LedgerAccount     @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  asset             Asset             @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@index([ledgerTransactionId])
+  @@index([ledgerAccountId, createdAt])
+  @@index([assetId])
+  @@map("ledger_entries")
+}
+
+model Transaction {
+  id                  String            @id @default(uuid()) @db.Uuid
+  accountId           String            @map("account_id") @db.Uuid
+  walletId            String?           @map("wallet_id") @db.Uuid
+  ledgerTransactionId String?           @unique @map("ledger_transaction_id") @db.Uuid
+  providerId          String?           @map("provider_id") @db.Uuid
+  type                TransactionType
+  status              TransactionStatus @default(PENDING)
+  assetId             String            @map("asset_id") @db.Uuid
+  amount              Decimal           @db.Decimal(36, 18)
+  feeAssetId          String?           @map("fee_asset_id") @db.Uuid
+  feeAmount           Decimal?          @map("fee_amount") @db.Decimal(36, 18)
+  providerReference   String?           @map("provider_reference") @db.VarChar(255)
+  idempotencyKey      String?           @unique @map("idempotency_key") @db.VarChar(128)
+  metadata            Json?
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  completedAt         DateTime?         @map("completed_at")
+
+  account           Account            @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  wallet            Wallet?            @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  ledgerTransaction LedgerTransaction? @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  provider          Provider?           @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  asset             Asset               @relation("TransactionAsset", fields: [assetId], references: [id], onDelete: Restrict)
+  feeAsset          Asset?              @relation("TransactionFeeAsset", fields: [feeAssetId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([walletId, createdAt])
+  @@index([providerId, providerReference])
+  @@index([type, status])
+  @@map("transactions")
+}
+
+model Provider {
+  id          String              @id @default(uuid()) @db.Uuid
+  code        String              @unique @db.VarChar(64)
+  name        String              @db.VarChar(120)
+  type        ProviderType
+  environment ProviderEnvironment @default(SANDBOX)
+  status      ProviderStatus      @default(DISABLED)
+  priority    Int                 @default(100)
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  capabilities  ProviderCapability[]
+  accounts      ProviderAccount[]
+  wallets       Wallet[]
+  ledgerAccounts LedgerAccount[]
+  transactions  Transaction[]
+
+  @@index([type, status])
+  @@map("providers")
+}
+
+model ProviderCapability {
+  id         String   @id @default(uuid()) @db.Uuid
+  providerId String   @map("provider_id") @db.Uuid
+  assetId    String?  @map("asset_id") @db.Uuid
+  code       String   @db.VarChar(96)
+  enabled    Boolean  @default(true)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  asset    Asset?    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([providerId, code, assetId])
+  @@index([code, enabled])
+  @@map("provider_capabilities")
+}
+
+model ProviderAccount {
+  id                String   @id @default(uuid()) @db.Uuid
+  providerId        String   @map("provider_id") @db.Uuid
+  accountId         String?  @map("account_id") @db.Uuid
+  externalAccountId String?  @map("external_account_id") @db.VarChar(255)
+  label             String?  @db.VarChar(120)
+  status            String   @default("ACTIVE") @db.VarChar(32)
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  account  Account? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  wallets  Wallet[]
+
+  @@unique([providerId, externalAccountId])
+  @@index([accountId])
+  @@map("provider_accounts")
+}
+
+model WebhookEvent {
+  id              String             @id @default(uuid()) @db.Uuid
+  providerCode    String             @map("provider_code") @db.VarChar(64)
+  externalEventId String             @map("external_event_id") @db.VarChar(255)
+  eventType       String             @map("event_type") @db.VarChar(160)
+  status          WebhookEventStatus @default(RECEIVED)
+  payloadHash     String?            @map("payload_hash") @db.VarChar(128)
+  payload         Json
+  attemptCount    Int                @default(0) @map("attempt_count")
+  error           String?
+  receivedAt      DateTime           @default(now()) @map("received_at")
+  processedAt     DateTime?          @map("processed_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@unique([providerCode, externalEventId])
+  @@index([status, receivedAt])
+  @@index([eventType])
+  @@map("webhook_events")
+}
+
+model AuditLog {
+  id          String         @id @default(uuid()) @db.Uuid
+  actorType   AuditActorType @map("actor_type")
+  actorUserId String?        @map("actor_user_id") @db.Uuid
+  action      String         @db.VarChar(160)
+  resourceType String        @map("resource_type") @db.VarChar(120)
+  resourceId  String?        @map("resource_id") @db.VarChar(160)
+  before      Json?
+  after       Json?
+  metadata    Json?
+  requestId   String?        @map("request_id") @db.VarChar(128)
+  ipAddress   String?        @map("ip_address") @db.VarChar(64)
+  userAgent   String?        @map("user_agent") @db.VarChar(512)
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  actorUser User? @relation("AuditActorUser", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([requestId])
+  @@map("audit_logs")
+}
