@@ -17,7 +17,16 @@ ENV NODE_ENV=production
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --omit=peer && npm cache clean --force
+RUN npm ci --omit=dev --omit=peer \
+    && rm -rf \
+      node_modules/prisma \
+      node_modules/@prisma/config \
+      node_modules/deepmerge-ts \
+    && node -e "require('@prisma/client'); console.log('Prisma runtime client import OK')" \
+    && test ! -e node_modules/prisma \
+    && test ! -e node_modules/@prisma/config \
+    && test ! -e node_modules/deepmerge-ts \
+    && npm cache clean --force
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
