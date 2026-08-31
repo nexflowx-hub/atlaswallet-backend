@@ -1,27 +1,23 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { HealthService } from './health.service';
 
 @Controller('health')
 export class HealthController {
+  constructor(private readonly healthService: HealthService) {}
+
   @Get()
   health() {
-    return {
-      status: 'ONLINE',
-      service: 'AtlasWallet API',
-      version: '0.1.0',
-      timestamp: new Date().toISOString(),
-    };
+    return this.healthService.liveness();
   }
 
   @Get('ready')
-  ready() {
-    return {
-      status: 'READY',
-      service: 'AtlasWallet API',
-      dependencies: {
-        database: 'NOT_CONFIGURED',
-        redis: 'NOT_CONFIGURED',
-      },
-      timestamp: new Date().toISOString(),
-    };
+  async ready() {
+    const result = await this.healthService.readiness();
+
+    if (!result.ready) {
+      throw new ServiceUnavailableException(result.body);
+    }
+
+    return result.body;
   }
 }
