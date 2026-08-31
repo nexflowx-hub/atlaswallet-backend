@@ -14,9 +14,10 @@ RUN npm run build
 FROM node:22-alpine AS production-deps
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --omit=peer && npm cache clean --force
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
