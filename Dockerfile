@@ -22,7 +22,6 @@ RUN npm ci --omit=dev --omit=peer \
       node_modules/prisma \
       node_modules/@prisma/config \
       node_modules/deepmerge-ts \
-    && node -e "require('@prisma/client'); console.log('Prisma runtime client import OK')" \
     && test ! -e node_modules/prisma \
     && test ! -e node_modules/@prisma/config \
     && test ! -e node_modules/deepmerge-ts \
@@ -34,10 +33,13 @@ ENV NODE_ENV=production
 
 COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
 COPY --from=build /app/dist ./dist
 COPY package.json package-lock.json ./
-COPY prisma ./prisma
+
+RUN node -e "require('@prisma/client'); console.log('Prisma runtime client import OK')" \
+    && test ! -e node_modules/prisma \
+    && test ! -e node_modules/@prisma/config \
+    && test ! -e node_modules/deepmerge-ts
 
 USER node
 
