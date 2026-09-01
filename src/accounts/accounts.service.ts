@@ -3,12 +3,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   AccountType,
   AssetStatus,
   AssetType,
   AuditActorType,
+  IdentityLevel,
   LedgerAccountType,
+  ProviderStatus,
 } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
@@ -20,7 +23,10 @@ export interface BootstrapRequestContext {
 
 @Injectable()
 export class AccountsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   async getMe(authUser: AuthenticatedUser) {
     const user = await this.prisma.user.findUnique({
@@ -30,6 +36,10 @@ export class AccountsService {
           where: { type: AccountType.INDIVIDUAL },
           orderBy: { createdAt: 'asc' },
           take: 1,
+          include: {
+            pricingPlan: true,
+            policyProfile: true,
+          },
         },
       },
     });
@@ -56,8 +66,11 @@ export class AccountsService {
             type: account.type,
             status: account.status,
             kycStatus: account.kycStatus,
+            identityLevel: account.identityLevel,
             countryCode: account.countryCode,
             baseCurrency: account.baseCurrency,
+            pricingPlan: this.serializePricingPlan(account.pricingPlan),
+            policyProfile: this.serializePolicyProfile(account.policyProfile),
             createdAt: account.createdAt,
           }
         : null,
@@ -77,6 +90,18 @@ export class AccountsService {
           )
           SELECT 1::int AS locked FROM lock
         `;
+
+        const pricingPlan = await tx.pricingPlan.findUnique({
+          where: { code: 'BLACK_30' },
+        });
+
+        const policyProfile = await tx.policyProfile.findUnique({
+          where: { code: 'BLACK_ENTRY_OPEN' },
+        });
+
+        if (!pricingPlan?.active || !policyProfile?.active) {
+          throw new Error('ONBOARDING_CONFIGURATION_MISSING');
+        }
 
         let user = await tx.user.findUnique({
           where: { authUserId: authUser.id },
@@ -123,6 +148,9 @@ export class AccountsService {
             data: {
               userId: user.id,
               type: AccountType.INDIVIDUAL,
+              identityLevel: IdentityLevel.SELF_DECLARED,
+              pricingPlanId: pricingPlan.id,
+              policyProfileId: policyProfile.id,
               baseCurrency: 'BRL',
             },
           });
@@ -225,6 +253,9 @@ export class AccountsService {
               accountType: account.type,
               accountStatus: account.status,
               kycStatus: account.kycStatus,
+              identityLevel: account.identityLevel,
+              pricingPlan: pricingPlan.code,
+              policyProfile: policyProfile.code,
               baseCurrency: account.baseCurrency,
               monetaryAssets: assets.length,
             },
@@ -232,6 +263,7 @@ export class AccountsService {
               userCreated,
               accountCreated,
               walletsCreated,
+              frictionlessEntry: true,
             },
             requestId: context.requestId,
             userAgent: context.userAgent,
@@ -264,8 +296,11 @@ export class AccountsService {
             type: account.type,
             status: account.status,
             kycStatus: account.kycStatus,
+            identityLevel: account.identityLevel,
             countryCode: account.countryCode,
             baseCurrency: account.baseCurrency,
+            pricingPlan: this.serializePricingPlan(pricingPlan),
+            policyProfile: this.serializePolicyProfile(policyProfile),
           },
           wallets: wallets.map((wallet) => this.serializeWallet(wallet)),
         };
@@ -275,6 +310,94 @@ export class AccountsService {
         timeout: 15000,
       },
     );
+  }
+
+  async getAccess(authUser: AuthenticatedUser) {
+    const account = await this.requireIndividualAccountWithAccess(authUser.id);
+
+    const assets = await this.prisma.asset.findMany({
+      where: {
+        status: AssetStatus.ACTIVE,
+      },
+      select: {
+        type: true,
+        depositEnabled: true,
+        withdrawEnabled: true,
+        exchangeEnabled: true,
+      },
+    });
+
+    const activeProviderCount = await this.prisma.provider.count({
+      where: { status: ProviderStatus.ACTIVE },
+    });
+
+    const systemMoneyMovementEnabled =
+      (this.config.get<string>('MONEY_MOVEMENT_ENABLED') ?? 'false')
+        .trim()
+        .toLowerCase() === 'true';
+
+    const fiatDepositReady = assets.some(
+      (asset) => asset.type === AssetType.FIAT && asset.depositEnabled,
+    );
+    const fiatWithdrawalReady = assets.some(
+      (asset) => asset.type === AssetType.FIAT && asset.withdrawEnabled,
+    );
+    const cryptoDepositReady = assets.some(
+      (asset) => asset.type === AssetType.CRYPTO && asset.depositEnabled,
+    );
+    const cryptoWithdrawalReady = assets.some(
+      (asset) => asset.type === AssetType.CRYPTO && asset.withdrawEnabled,
+    );
+    const exchangeReady = assets.some((asset) => asset.exchangeEnabled);
+    const executionGate = systemMoneyMovementEnabled && activeProviderCount > 0;
+    const policy = account.policyProfile;
+
+    return {
+      accountId: account.id,
+      accountStatus: account.status,
+      identityLevel: account.identityLevel,
+      kycStatus: account.kycStatus,
+      pricingPlan: this.serializePricingPlan(account.pricingPlan),
+      policyProfile: this.serializePolicyProfile(policy),
+      controls: {
+        systemMoneyMovementEnabled,
+        activeProviderCount,
+        executionGate,
+      },
+      requestedCapabilities: {
+        fiatDeposit: policy.active && policy.allowFiatDeposit,
+        fiatWithdrawal: policy.active && policy.allowFiatWithdrawal,
+        cryptoDeposit: policy.active && policy.allowCryptoDeposit,
+        cryptoWithdrawal: policy.active && policy.allowCryptoWithdrawal,
+        exchange: policy.active && policy.allowExchange,
+        internalTransfer: policy.active && policy.allowInternalTransfer,
+        investment: policy.active && policy.allowInvestment,
+      },
+      effectiveCapabilities: {
+        fiatDeposit:
+          executionGate && policy.active && policy.allowFiatDeposit && fiatDepositReady,
+        fiatWithdrawal:
+          executionGate &&
+          policy.active &&
+          policy.allowFiatWithdrawal &&
+          fiatWithdrawalReady,
+        cryptoDeposit:
+          executionGate &&
+          policy.active &&
+          policy.allowCryptoDeposit &&
+          cryptoDepositReady,
+        cryptoWithdrawal:
+          executionGate &&
+          policy.active &&
+          policy.allowCryptoWithdrawal &&
+          cryptoWithdrawalReady,
+        exchange:
+          executionGate && policy.active && policy.allowExchange && exchangeReady,
+        internalTransfer:
+          executionGate && policy.active && policy.allowInternalTransfer,
+        investment: false,
+      },
+    };
   }
 
   async getWallets(authUser: AuthenticatedUser) {
@@ -336,6 +459,50 @@ export class AccountsService {
     }
 
     return account;
+  }
+
+  private async requireIndividualAccountWithAccess(authUserId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { authUserId },
+      include: {
+        accounts: {
+          where: { type: AccountType.INDIVIDUAL },
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+          include: {
+            pricingPlan: true,
+            policyProfile: true,
+          },
+        },
+      },
+    });
+
+    const account = user?.accounts[0];
+
+    if (!account) {
+      throw new ConflictException('ACCOUNT_NOT_PROVISIONED');
+    }
+
+    return account;
+  }
+
+  private serializePricingPlan(plan: any) {
+    return {
+      code: plan.code,
+      label: plan.label,
+      feeBasisPoints: plan.feeBasisPoints,
+      feePercent: plan.feeBasisPoints / 100,
+      active: plan.active,
+    };
+  }
+
+  private serializePolicyProfile(policy: any) {
+    return {
+      code: policy.code,
+      label: policy.label,
+      operationalMode: policy.operationalMode,
+      active: policy.active,
+    };
   }
 
   private serializeWallet(wallet: any) {
