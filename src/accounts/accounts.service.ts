@@ -70,7 +70,12 @@ export class AccountsService {
   ) {
     return this.prisma.$transaction(async (tx) => {
       const lockKey = `atlaswallet:bootstrap:${authUser.id}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      await tx.$queryRaw`
+        WITH lock AS (
+          SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
+        )
+        SELECT 1::int AS locked FROM lock
+      `;
 
       let user = await tx.user.findUnique({
         where: { authUserId: authUser.id },
