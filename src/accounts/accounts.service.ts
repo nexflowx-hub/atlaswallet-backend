@@ -68,184 +68,213 @@ export class AccountsService {
     authUser: AuthenticatedUser,
     context: BootstrapRequestContext = {},
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const lockKey = `atlaswallet:bootstrap:${authUser.id}`;
-      await tx.$queryRaw`
-        WITH lock AS (
-          SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
-        )
-        SELECT 1::int AS locked FROM lock
-      `;
+    return this.prisma.$transaction(
+      async (tx) => {
+        const lockKey = `atlaswallet:bootstrap:${authUser.id}`;
+        await tx.$queryRaw`
+          WITH lock AS (
+            SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
+          )
+          SELECT 1::int AS locked FROM lock
+        `;
 
-      let user = await tx.user.findUnique({
-        where: { authUserId: authUser.id },
-      });
-
-      if (authUser.email) {
-        const emailOwner = await tx.user.findUnique({
-          where: { email: authUser.email },
+        let user = await tx.user.findUnique({
+          where: { authUserId: authUser.id },
         });
 
-        if (emailOwner && emailOwner.authUserId !== authUser.id) {
-          throw new ConflictException('EMAIL_ALREADY_LINKED');
+        if (authUser.email) {
+          const emailOwner = await tx.user.findUnique({
+            where: { email: authUser.email },
+          });
+
+          if (emailOwner && emailOwner.authUserId !== authUser.id) {
+            throw new ConflictException('EMAIL_ALREADY_LINKED');
+          }
         }
-      }
 
-      const userCreated = !user;
+        const userCreated = !user;
 
-      if (!user) {
-        user = await tx.user.create({
-          data: {
-            authUserId: authUser.id,
-            email: authUser.email,
-          },
-        });
-      } else if (authUser.email && user.email !== authUser.email) {
-        user = await tx.user.update({
-          where: { id: user.id },
-          data: { email: authUser.email },
-        });
-      }
+        if (!user) {
+          user = await tx.user.create({
+            data: {
+              authUserId: authUser.id,
+              email: authUser.email,
+            },
+          });
+        } else if (authUser.email && user.email !== authUser.email) {
+          user = await tx.user.update({
+            where: { id: user.id },
+            data: { email: authUser.email },
+          });
+        }
 
-      let account = await tx.account.findFirst({
-        where: {
-          userId: user.id,
-          type: AccountType.INDIVIDUAL,
-        },
-        orderBy: { createdAt: 'asc' },
-      });
-
-      const accountCreated = !account;
-
-      if (!account) {
-        account = await tx.account.create({
-          data: {
+        let account = await tx.account.findFirst({
+          where: {
             userId: user.id,
             type: AccountType.INDIVIDUAL,
-            baseCurrency: 'BRL',
           },
+          orderBy: { createdAt: 'asc' },
         });
-      }
 
-      const assets = await tx.asset.findMany({
-        where: {
-          status: AssetStatus.ACTIVE,
-          type: {
-            in: [AssetType.FIAT, AssetType.CRYPTO],
-          },
-        },
-        orderBy: { code: 'asc' },
-      });
+        const accountCreated = !account;
 
-      const existingWallets = await tx.wallet.findMany({
-        where: { accountId: account.id },
-        select: { assetId: true },
-      });
-      const existingAssetIds = new Set(
-        existingWallets.map((wallet) => wallet.assetId),
-      );
-
-      let walletsCreated = 0;
-
-      for (const asset of assets) {
-        const wallet = await tx.wallet.upsert({
-          where: {
-            accountId_assetId: {
-              accountId: account.id,
-              assetId: asset.id,
+        if (!account) {
+          account = await tx.account.create({
+            data: {
+              userId: user.id,
+              type: AccountType.INDIVIDUAL,
+              baseCurrency: 'BRL',
             },
-          },
-          create: {
-            accountId: account.id,
-            assetId: asset.id,
-          },
-          update: {},
-        });
-
-        if (!existingAssetIds.has(asset.id)) {
-          walletsCreated += 1;
+          });
         }
 
-        await tx.walletBalance.upsert({
-          where: { walletId: wallet.id },
-          create: { walletId: wallet.id },
-          update: {},
+        const assets = await tx.asset.findMany({
+          where: {
+            status: AssetStatus.ACTIVE,
+            type: {
+              in: [AssetType.FIAT, AssetType.CRYPTO],
+            },
+          },
+          orderBy: { code: 'asc' },
         });
 
-        const ledgerCode = `CUSTOMER:${account.id}:${asset.code}`;
+        const walletCreateResult = await tx.wallet.createMany({
+          data: assets.map((asset) => ({
+            accountId: account.id,
+            assetId: asset.id,
+          })),
+          skipDuplicates: true,
+        });
 
-        await tx.ledgerAccount.upsert({
-          where: { code: ledgerCode },
-          create: {
-            code: ledgerCode,
+        const walletsCreated = walletCreateResult.count;
+
+        const walletRows = await tx.wallet.findMany({
+          where: {
+            accountId: account.id,
+            assetId: {
+              in: assets.map((asset) => asset.id),
+            },
+          },
+          select: {
+            id: true,
+            assetId: true,
+          },
+        });
+
+        if (walletRows.length !== assets.length) {
+          throw new Error(
+            `WALLET_PROVISIONING_INCOMPLETE:${walletRows.length}/${assets.length}`,
+          );
+        }
+
+        await tx.walletBalance.createMany({
+          data: walletRows.map((wallet) => ({
+            walletId: wallet.id,
+          })),
+          skipDuplicates: true,
+        });
+
+        const ledgerCodes = assets.map(
+          (asset) => `CUSTOMER:${account.id}:${asset.code}`,
+        );
+
+        await tx.ledgerAccount.createMany({
+          data: assets.map((asset) => ({
+            code: `CUSTOMER:${account.id}:${asset.code}`,
             type: LedgerAccountType.CUSTOMER,
             ownerAccountId: account.id,
             assetId: asset.id,
             name: `Customer ${asset.code}`,
-          },
-          update: {
             active: true,
+          })),
+          skipDuplicates: true,
+        });
+
+        await tx.ledgerAccount.updateMany({
+          where: {
+            code: { in: ledgerCodes },
+            ownerAccountId: account.id,
+            type: LedgerAccountType.CUSTOMER,
+          },
+          data: { active: true },
+        });
+
+        const provisionedLedgerAccounts = await tx.ledgerAccount.count({
+          where: {
+            code: { in: ledgerCodes },
+            ownerAccountId: account.id,
+            type: LedgerAccountType.CUSTOMER,
           },
         });
-      }
 
-      await tx.auditLog.create({
-        data: {
-          actorType: AuditActorType.USER,
-          actorUserId: user.id,
-          action: 'ACCOUNT_BOOTSTRAP_EXECUTED',
-          resourceType: 'ACCOUNT',
-          resourceId: account.id,
-          after: {
-            accountId: account.id,
-            accountType: account.type,
-            accountStatus: account.status,
+        if (provisionedLedgerAccounts !== assets.length) {
+          throw new Error(
+            `LEDGER_ACCOUNT_PROVISIONING_INCOMPLETE:${provisionedLedgerAccounts}/${assets.length}`,
+          );
+        }
+
+        await tx.auditLog.create({
+          data: {
+            actorType: AuditActorType.USER,
+            actorUserId: user.id,
+            action: 'ACCOUNT_BOOTSTRAP_EXECUTED',
+            resourceType: 'ACCOUNT',
+            resourceId: account.id,
+            after: {
+              accountId: account.id,
+              accountType: account.type,
+              accountStatus: account.status,
+              kycStatus: account.kycStatus,
+              baseCurrency: account.baseCurrency,
+              monetaryAssets: assets.length,
+            },
+            metadata: {
+              userCreated,
+              accountCreated,
+              walletsCreated,
+            },
+            requestId: context.requestId,
+            userAgent: context.userAgent,
+          },
+        });
+
+        const wallets = await tx.wallet.findMany({
+          where: { accountId: account.id },
+          include: {
+            asset: true,
+            balance: true,
+          },
+        });
+        wallets.sort((a, b) => a.asset.code.localeCompare(b.asset.code));
+
+        return {
+          created: {
+            user: userCreated,
+            account: accountCreated,
+            wallets: walletsCreated,
+          },
+          user: {
+            id: user.id,
+            authUserId: user.authUserId,
+            email: user.email,
+            status: user.status,
+          },
+          account: {
+            id: account.id,
+            type: account.type,
+            status: account.status,
             kycStatus: account.kycStatus,
+            countryCode: account.countryCode,
             baseCurrency: account.baseCurrency,
-            monetaryAssets: assets.length,
           },
-          metadata: {
-            userCreated,
-            accountCreated,
-            walletsCreated,
-          },
-          requestId: context.requestId,
-          userAgent: context.userAgent,
-        },
-      });
-
-      const wallets = await tx.wallet.findMany({
-        where: { accountId: account.id },
-        include: {
-          asset: true,
-          balance: true,
-        },
-      });
-      wallets.sort((a, b) => a.asset.code.localeCompare(b.asset.code));
-
-      return {
-        created: {
-          user: userCreated,
-          account: accountCreated,
-          wallets: walletsCreated,
-        },
-        user: {
-          id: user.id,
-          authUserId: user.authUserId,
-          email: user.email,
-          status: user.status,
-        },
-        account: {
-          id: account.id,
-          type: account.type,
-          status: account.status,
-          kycStatus: account.kycStatus,
-          countryCode: account.countryCode,
-          baseCurrency: account.baseCurrency,
-        },
-        wallets: wallets.map((wallet) => this.serializeWallet(wallet)),
-      };
-    });
+          wallets: wallets.map((wallet) => this.serializeWallet(wallet)),
+        };
+      },
+      {
+        maxWait: 5000,
+        timeout: 15000,
+      },
+    );
   }
 
   async getWallets(authUser: AuthenticatedUser) {
