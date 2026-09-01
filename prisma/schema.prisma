@@ -38,6 +38,19 @@ enum KycStatus {
   EXPIRED
 }
 
+enum IdentityLevel {
+  SELF_DECLARED
+  BASIC
+  VERIFIED
+  ENHANCED
+}
+
+enum OperationalMode {
+  OPEN
+  CONTROLLED
+  RESTRICTED
+}
+
 enum AssetType {
   FIAT
   CRYPTO
@@ -173,31 +186,79 @@ model User {
   updatedAt  DateTime   @updatedAt @map("updated_at")
 
   accounts  Account[]
-  auditLogs AuditLog[]  @relation("AuditActorUser")
+  auditLogs AuditLog[] @relation("AuditActorUser")
 
   @@map("users")
 }
 
-model Account {
-  id          String        @id @default(uuid()) @db.Uuid
-  userId      String        @map("user_id") @db.Uuid
-  type        AccountType   @default(INDIVIDUAL)
-  status      AccountStatus @default(PENDING)
-  kycStatus   KycStatus     @default(NOT_STARTED) @map("kyc_status")
-  countryCode String?       @map("country_code") @db.VarChar(2)
-  baseCurrency String       @default("BRL") @map("base_currency") @db.VarChar(16)
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+model PricingPlan {
+  id             String   @id @default(uuid()) @db.Uuid
+  code           String   @unique @db.VarChar(32)
+  label          String   @db.VarChar(80)
+  feeBasisPoints Int      @map("fee_basis_points")
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(100) @map("sort_order")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
-  user              User               @relation(fields: [userId], references: [id], onDelete: Restrict)
-  wallets           Wallet[]
-  ledgerAccounts    LedgerAccount[]
-  transactions      Transaction[]
-  providerAccounts  ProviderAccount[]
+  accounts Account[]
+
+  @@index([active, sortOrder])
+  @@map("pricing_plans")
+}
+
+model PolicyProfile {
+  id                    String          @id @default(uuid()) @db.Uuid
+  code                  String          @unique @db.VarChar(64)
+  label                 String          @db.VarChar(120)
+  operationalMode       OperationalMode @default(CONTROLLED) @map("operational_mode")
+  allowFiatDeposit      Boolean         @default(false) @map("allow_fiat_deposit")
+  allowFiatWithdrawal   Boolean         @default(false) @map("allow_fiat_withdrawal")
+  allowCryptoDeposit    Boolean         @default(false) @map("allow_crypto_deposit")
+  allowCryptoWithdrawal Boolean         @default(false) @map("allow_crypto_withdrawal")
+  allowExchange         Boolean         @default(false) @map("allow_exchange")
+  allowInternalTransfer Boolean         @default(false) @map("allow_internal_transfer")
+  allowInvestment       Boolean         @default(false) @map("allow_investment")
+  active                Boolean         @default(true)
+  metadata              Json?
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
+
+  accounts Account[]
+
+  @@index([active, operationalMode])
+  @@map("policy_profiles")
+}
+
+model Account {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @map("user_id") @db.Uuid
+  type            AccountType   @default(INDIVIDUAL)
+  status          AccountStatus @default(PENDING)
+  kycStatus       KycStatus     @default(NOT_STARTED) @map("kyc_status")
+  identityLevel   IdentityLevel @default(SELF_DECLARED) @map("identity_level")
+  pricingPlanId   String        @map("pricing_plan_id") @db.Uuid
+  policyProfileId String        @map("policy_profile_id") @db.Uuid
+  countryCode     String?       @map("country_code") @db.VarChar(2)
+  baseCurrency    String        @default("BRL") @map("base_currency") @db.VarChar(16)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  pricingPlan      PricingPlan       @relation(fields: [pricingPlanId], references: [id], onDelete: Restrict)
+  policyProfile    PolicyProfile     @relation(fields: [policyProfileId], references: [id], onDelete: Restrict)
+  wallets          Wallet[]
+  ledgerAccounts   LedgerAccount[]
+  transactions     Transaction[]
+  providerAccounts ProviderAccount[]
 
   @@index([userId])
   @@index([status])
   @@index([kycStatus])
+  @@index([identityLevel])
+  @@index([pricingPlanId])
+  @@index([policyProfileId])
   @@map("accounts")
 }
 
@@ -220,8 +281,8 @@ model Asset {
   wallets              Wallet[]
   ledgerAccounts       LedgerAccount[]
   ledgerEntries        LedgerEntry[]
-  transactions         Transaction[]              @relation("TransactionAsset")
-  feeTransactions      Transaction[]              @relation("TransactionFeeAsset")
+  transactions         Transaction[]             @relation("TransactionAsset")
+  feeTransactions      Transaction[]             @relation("TransactionFeeAsset")
   providerCapabilities ProviderCapability[]
 
   @@index([symbol])
@@ -292,19 +353,19 @@ model LedgerAccount {
 }
 
 model LedgerTransaction {
-  id               String                  @id @default(uuid()) @db.Uuid
-  reference        String                  @unique @db.VarChar(96)
-  type             LedgerTransactionType
-  status           LedgerTransactionStatus @default(PENDING)
-  idempotencyKey   String?                 @unique @map("idempotency_key") @db.VarChar(128)
-  externalReference String?                @map("external_reference") @db.VarChar(255)
-  metadata         Json?
-  createdAt        DateTime                @default(now()) @map("created_at")
-  postedAt         DateTime?               @map("posted_at")
-  reversedAt       DateTime?               @map("reversed_at")
+  id                String                  @id @default(uuid()) @db.Uuid
+  reference         String                  @unique @db.VarChar(96)
+  type              LedgerTransactionType
+  status            LedgerTransactionStatus @default(PENDING)
+  idempotencyKey    String?                 @unique @map("idempotency_key") @db.VarChar(128)
+  externalReference String?                 @map("external_reference") @db.VarChar(255)
+  metadata          Json?
+  createdAt         DateTime                @default(now()) @map("created_at")
+  postedAt          DateTime?               @map("posted_at")
+  reversedAt        DateTime?               @map("reversed_at")
 
-  entries      LedgerEntry[]
-  transaction  Transaction?
+  entries     LedgerEntry[]
+  transaction Transaction?
 
   @@index([type, status])
   @@index([createdAt])
@@ -374,11 +435,11 @@ model Provider {
   createdAt   DateTime            @default(now()) @map("created_at")
   updatedAt   DateTime            @updatedAt @map("updated_at")
 
-  capabilities  ProviderCapability[]
-  accounts      ProviderAccount[]
-  wallets       Wallet[]
+  capabilities   ProviderCapability[]
+  accounts       ProviderAccount[]
+  wallets        Wallet[]
   ledgerAccounts LedgerAccount[]
-  transactions  Transaction[]
+  transactions   Transaction[]
 
   @@index([type, status])
   @@map("providers")
@@ -443,19 +504,19 @@ model WebhookEvent {
 }
 
 model AuditLog {
-  id          String         @id @default(uuid()) @db.Uuid
-  actorType   AuditActorType @map("actor_type")
-  actorUserId String?        @map("actor_user_id") @db.Uuid
-  action      String         @db.VarChar(160)
-  resourceType String        @map("resource_type") @db.VarChar(120)
-  resourceId  String?        @map("resource_id") @db.VarChar(160)
-  before      Json?
-  after       Json?
-  metadata    Json?
-  requestId   String?        @map("request_id") @db.VarChar(128)
-  ipAddress   String?        @map("ip_address") @db.VarChar(64)
-  userAgent   String?        @map("user_agent") @db.VarChar(512)
-  createdAt   DateTime       @default(now()) @map("created_at")
+  id           String         @id @default(uuid()) @db.Uuid
+  actorType    AuditActorType @map("actor_type")
+  actorUserId  String?        @map("actor_user_id") @db.Uuid
+  action       String         @db.VarChar(160)
+  resourceType String         @map("resource_type") @db.VarChar(120)
+  resourceId   String?        @map("resource_id") @db.VarChar(160)
+  before       Json?
+  after        Json?
+  metadata     Json?
+  requestId    String?        @map("request_id") @db.VarChar(128)
+  ipAddress    String?        @map("ip_address") @db.VarChar(64)
+  userAgent    String?        @map("user_agent") @db.VarChar(512)
+  createdAt    DateTime       @default(now()) @map("created_at")
 
   actorUser User? @relation("AuditActorUser", fields: [actorUserId], references: [id], onDelete: SetNull)
 
