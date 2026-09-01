@@ -8,6 +8,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const config = app.get(ConfigService);
 
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
+
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({
