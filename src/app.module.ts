@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AccountsModule } from './accounts/accounts.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { ProfilesModule } from './profiles/profiles.module';
 import { RedisModule } from './redis/redis.module';
 
 @Module({
@@ -15,6 +16,7 @@ import { RedisModule } from './redis/redis.module';
     RedisModule,
     HealthModule,
     AccountsModule,
+    ProfilesModule,
   ],
 })
 export class AppModule {}

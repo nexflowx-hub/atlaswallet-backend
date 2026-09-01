@@ -245,9 +245,10 @@ model Account {
   createdAt       DateTime      @default(now()) @map("created_at")
   updatedAt       DateTime      @updatedAt @map("updated_at")
 
-  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  pricingPlan      PricingPlan       @relation(fields: [pricingPlanId], references: [id], onDelete: Restrict)
-  policyProfile    PolicyProfile     @relation(fields: [policyProfileId], references: [id], onDelete: Restrict)
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  pricingPlan      PricingPlan          @relation(fields: [pricingPlanId], references: [id], onDelete: Restrict)
+  policyProfile    PolicyProfile        @relation(fields: [policyProfileId], references: [id], onDelete: Restrict)
+  profile          SelfDeclaredProfile?
   wallets          Wallet[]
   ledgerAccounts   LedgerAccount[]
   transactions     Transaction[]
@@ -260,6 +261,25 @@ model Account {
   @@index([pricingPlanId])
   @@index([policyProfileId])
   @@map("accounts")
+}
+
+model SelfDeclaredProfile {
+  id                     String    @id @default(uuid()) @db.Uuid
+  accountId              String    @unique @map("account_id") @db.Uuid
+  firstName              String?   @map("first_name") @db.VarChar(80)
+  lastName               String?   @map("last_name") @db.VarChar(80)
+  dateOfBirth            DateTime? @map("date_of_birth") @db.Date
+  nationalityCountryCode String?   @map("nationality_country_code") @db.VarChar(2)
+  residenceCountryCode   String?   @map("residence_country_code") @db.VarChar(2)
+  phoneE164              String?   @map("phone_e164") @db.VarChar(32)
+  completedAt            DateTime? @map("completed_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([residenceCountryCode])
+  @@map("self_declared_profiles")
 }
 
 model Asset {
