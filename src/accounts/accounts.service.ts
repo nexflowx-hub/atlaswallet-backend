@@ -215,12 +215,8 @@ export class AccountsService {
           asset: true,
           balance: true,
         },
-        orderBy: {
-          asset: {
-            code: 'asc',
-          },
-        },
       });
+      wallets.sort((a, b) => a.asset.code.localeCompare(b.asset.code));
 
       return {
         created: {
@@ -256,12 +252,8 @@ export class AccountsService {
         asset: true,
         balance: true,
       },
-      orderBy: {
-        asset: {
-          code: 'asc',
-        },
-      },
     });
+    wallets.sort((a, b) => a.asset.code.localeCompare(b.asset.code));
 
     return {
       accountId: account.id,
