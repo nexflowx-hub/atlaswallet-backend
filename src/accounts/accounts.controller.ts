@@ -41,6 +41,11 @@ export class AccountsController {
     });
   }
 
+  @Get('account/access')
+  async access(@CurrentAuthUser() authUser: AuthenticatedUser) {
+    return this.accountsService.getAccess(authUser);
+  }
+
   @Get('wallets')
   async wallets(@CurrentAuthUser() authUser: AuthenticatedUser) {
     return this.accountsService.getWallets(authUser);
